@@ -12,6 +12,7 @@ import os
 import pickle
 import random
 import zlib
+import multiprocessing as mp
 from collections import defaultdict
 
 import lightgbm as lgb
@@ -119,6 +120,16 @@ def _read_target_pool(data_dir: str, positive_ids: set, background_samples: int,
     return targets
 
 
+def _normalise_one(args):
+    """Worker function for parallel normalization."""
+    entity_id, name, address, country = args
+    return (entity_id, {
+        "name": normalize_business_name(name),
+        "addr": normalize_address(address, country),
+        "country": country,
+    })
+
+
 def _normalise_records(records: dict) -> dict:
     return {
         entity_id: {
@@ -128,6 +139,31 @@ def _normalise_records(records: dict) -> dict:
         }
         for entity_id, (name, address, country) in records.items()
     }
+
+
+def _normalise_records_parallel(records: dict, num_workers: int = None, label: str = "records") -> dict:
+    """Normalize records using multiprocessing for 10M+ scale."""
+    if num_workers is None:
+        num_workers = min(mp.cpu_count() or 1, 48)
+
+    total = len(records)
+    items = [(eid, name, addr, country) for eid, (name, addr, country) in records.items()]
+
+    result = {}
+    chunk_size = max(5000, total // (num_workers * 10))
+
+    print(f"    Normalizing {total:,} {label} across {num_workers} workers (chunk={chunk_size:,})...", flush=True)
+
+    with mp.Pool(num_workers) as pool:
+        done = 0
+        for eid, norm in pool.imap_unordered(_normalise_one, items, chunksize=chunk_size):
+            result[eid] = norm
+            done += 1
+            if done % 500000 == 0:
+                print(f"      {done:,}/{total:,} ({100*done/total:.0f}%)", flush=True)
+
+    print(f"    Done: {len(result):,} {label} normalized.", flush=True)
+    return result
 
 
 def train_matching_model(
@@ -162,7 +198,10 @@ def train_matching_model(
     print(f"\n[3/6] Normalizing records...")
     s1_norm = _normalise_records(s1_data)
     print(f"  Normalized {len(s1_norm):,} S1 records.")
-    target_norm = _normalise_records(target_data)
+    if len(target_data) > 100000:
+        target_norm = _normalise_records_parallel(target_data, label="target records")
+    else:
+        target_norm = _normalise_records(target_data)
     print(f"  Normalized {len(target_norm):,} target records.")
 
     print(f"\n[4/6] Building blocking indexes and generating pairs...")
