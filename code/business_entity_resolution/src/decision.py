@@ -29,13 +29,29 @@ def should_accept_pair(source_norm: dict, candidate_norm: dict, probability: flo
     candidate_nums = set(candidate_norm['addr']['numbers'])
     number_conflict = bool(source_nums and candidate_nums and not (source_nums & candidate_nums))
 
-    # These are high-precision anchors, independent of the model score.
-    if source_name and source_name == candidate_name and len(source_name) >= 4 and not number_conflict:
-        return True
+    source_streets = set(source_norm['addr']['street_tokens'])
+    candidate_streets = set(candidate_norm['addr']['street_tokens'])
+    street_conflict = bool(source_streets and candidate_streets and not (source_streets & candidate_streets))
+
+    source_state = source_norm['addr'].get('canonical_state', '')
+    candidate_state = candidate_norm['addr'].get('canonical_state', '')
+    state_conflict = bool(source_state and candidate_state and source_state != candidate_state)
+
+    # Rejection: If both entities have conflicting states AND conflicting streets, they are physically disjoint.
+    if state_conflict and street_conflict:
+        return False
 
     candidate_domain = candidate_norm['name'].get('domain_base', '')
     source_compact = source_norm['name'].get('compact_name', '')
-    if candidate_domain and len(candidate_domain) >= 5 and candidate_domain in source_compact and not number_conflict:
+    domain_match = bool(candidate_domain and len(candidate_domain) >= 5 and candidate_domain in source_compact)
+
+    # Anchor 1: Exact clean name + compatible address (no number conflict, no street conflict, no state conflict)
+    if source_name and source_name == candidate_name and len(source_name) >= 4:
+        if not number_conflict and not street_conflict and not state_conflict:
+            return True
+
+    # Anchor 2: Domain match with compatible address
+    if domain_match and not number_conflict and not (state_conflict and street_conflict):
         return True
 
     if probability < threshold:
@@ -46,12 +62,20 @@ def should_accept_pair(source_norm: dict, candidate_norm: dict, probability: flo
         fuzz.token_set_ratio(source_name, candidate_name),
     ) / 100.0
 
-    # A hard address-number conflict is only acceptable with an exceptionally
-    # similar name. Missing addresses need the same conservative treatment.
-    if number_conflict and name_similarity < 0.80:
+    # Rule 1: A hard address number conflict cannot be accepted without domain match
+    if number_conflict and not (domain_match and name_similarity >= 0.95):
         return False
+
+    # Rule 2: Street conflict on different streets requires extremely high name similarity and no number conflict
+    if street_conflict and (number_conflict or name_similarity < 0.95):
+        return False
+
+    # Rule 3: Missing address requires high name similarity
     if (not source_addr or not candidate_addr) and name_similarity < 0.75:
         return False
+
+    # Rule 4: Low name similarity requires matching address numbers
     if name_similarity < 0.40 and not (source_nums and candidate_nums and (source_nums & candidate_nums)):
         return False
+
     return True

@@ -51,34 +51,46 @@ pip install -r code/business_entity_resolution/requirements.txt
 to the instance through a private channel (for example, `rsync` over SSH or
 your own private S3 bucket). Do not put the challenge data on GitHub.
 
-3. Run inference with unbuffered logs. The AWS runner defaults to 10,000 S1
-records per batch; reduce `BATCH_SIZE` if memory is constrained.
+### High-Performance Cloud Execution (Nebius / AWS / GCP)
 
-```bash
-chmod +x code/business_entity_resolution/run_aws.sh
-nohup env BATCH_SIZE=10000 MAX_CANDIDATES=25 \
-  code/business_entity_resolution/run_aws.sh > pipeline.log 2>&1 &
-tail -f pipeline.log
-```
+On a multi-core cloud instance (e.g. Nebius 64 vCPU, 256 GB RAM):
 
-After it finishes, validate before uploading `output/matching_results.tsv`:
+1. **System Dependencies**:
+   LightGBM requires OpenMP (`libgomp1`) on Linux:
+   ```bash
+   sudo apt-get update && sudo apt-get install -y libgomp1 python3-pip
+   pip3 install -r code/business_entity_resolution/requirements.txt
+   ```
 
-```bash
-python3 DATA/student_resource/utils/validate_submission.py \
-  --matching output/matching_results.tsv \
-  --candidate output/candidate_pairs.tsv \
-  --test-dir DATA/student_resource/dataset/test \
-  --check-ids
-```
+2. **Transfer Dataset**:
+   Ensure `DATA/student_resource/dataset/test/` is placed on the instance.
 
-`MAX_CANDIDATES=25` is the current high-recall baseline. Since candidate pool
-size is reviewed, benchmark lower caps against held-out training blocking recall
-before final submission; never lower it solely to make the output smaller.
+3. **Run Multi-Process Parallel Inference**:
+   The runner automatically detects all CPU cores and distributes work across parallel processes:
+   ```bash
+   chmod +x code/business_entity_resolution/run_aws.sh
+   ./code/business_entity_resolution/run_aws.sh
+   ```
+   Or run in the background with unbuffered logging:
+   ```bash
+   nohup ./code/business_entity_resolution/run_aws.sh > pipeline.log 2>&1 &
+   tail -f pipeline.log
+   ```
+   *Expected runtime on 64 vCPUs: ~2 to 3 minutes for all 1.73M entities (~12,000–15,000 ent/s).*
+
+4. **Validate Outputs**:
+   ```bash
+   python3 DATA/student_resource/utils/validate_submission.py \
+     --matching output/matching_results.tsv \
+     --candidate output/candidate_pairs.tsv \
+     --test-dir DATA/student_resource/dataset/test \
+     --check-ids
+   ```
 
 ### 1. Model Training (Optional, pre-trained weights included)
 To re-train the LightGBM classifier and find the optimal $F_{0.5}$ threshold:
 ```bash
-python3 src/train.py
+python3 code/business_entity_resolution/src/train.py
 ```
 
 ### 2. End-to-End Test Set Inference

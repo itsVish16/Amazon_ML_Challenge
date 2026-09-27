@@ -124,9 +124,13 @@ def train_matching_model(
     target_data = _read_target_pool(data_dir, positive_ids, background_samples, seed + 1)
     print(f"Target training pool: {len(target_data):,}")
     s1_norm, target_norm = _normalise_records(s1_data), _normalise_records(target_data)
-    blockers = defaultdict(lambda: CountryBlocker("", max_candidates=25, max_freq=2500))
+    blockers = {
+        c: CountryBlocker(c, max_candidates=25, max_freq=2500)
+        for c in ("France", "US", "India")
+    }
     for entity_id, (name, address, country) in target_data.items():
-        blockers[country].add_target_record(entity_id, name, address)
+        if country in blockers:
+            blockers[country].add_target_record(entity_id, name, address)
 
     train_ids, validation_ids = [], []
     for entity_id in s1_data:

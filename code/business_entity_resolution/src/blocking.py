@@ -123,16 +123,15 @@ class CountryBlocker:
         # file order, not match evidence.  Score each ID by independent
         # blocking signals, while keeping a small bounded pre-selection pool.
         candidates: Dict[str, float] = {}
-        preselection_limit = max(self.max_candidates * 4, self.max_candidates)
+        candidate_cap = max(self.max_candidates * 10, 250)
         for freq, k in scored:
             if freq > self.max_freq:
                 continue
             key_weight = 1.0 / (1.0 + freq)
             for cid in self.index[k]:
-                candidates[cid] = candidates.get(cid, 0.0) + key_weight
-                if len(candidates) >= preselection_limit:
-                    break
-            if len(candidates) >= preselection_limit:
-                break
+                if cid in candidates:
+                    candidates[cid] += key_weight
+                elif len(candidates) < candidate_cap:
+                    candidates[cid] = key_weight
 
         return [cid for cid, _ in sorted(candidates.items(), key=lambda item: (-item[1], item[0]))[:self.max_candidates]]

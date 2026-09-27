@@ -1,50 +1,88 @@
 """
-Ultra-Fast & Multi-Tiered Entity Resolution Inference Pipeline.
-Implements:
-  1. Microsecond early-exit filtering on disjoint house numbers and name tokens.
-  2. Multi-Tiered Decision Engine:
-     - Tier 1: Deterministic dual-anchor & domain matches.
-     - Tier 2: High-confidence LightGBM scoring with conflict-free constraints.
-     - Tier 3: Strict conflict-aware pruning (eradicates false merges).
-  3. EXACT row-for-row alignment matching test_source1.tsv.
-  4. Memory-safe country partitioning (< 3 GB peak RAM).
+High-Throughput Multi-Core Parallel Entity Resolution Inference Pipeline.
+Optimized for 64 vCPU & High-Memory Compute Instances (Nebius / Cloud / Local M-Series).
+
+Features:
+  1. Multi-Process Worker Pool (ProcessPoolExecutor) saturating all logical CPU cores.
+  2. Zero-Copy In-Memory Target & Inverted-Index Caching with OS Copy-On-Write sharing.
+  3. Microsecond early-exit filtering on disjoint house numbers and name tokens.
+  4. Multi-Tiered Decision Engine with strict state-conflict and street-conflict pruning.
+  5. Exact row-for-row alignment matching test_source1.tsv.
+  6. Automated post-run validation with validate_submission.py.
 """
 
 import os
 import sys
 import time
+import math
+import gc
 import pickle
-import sqlite3
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections import defaultdict
 import numpy as np
 import lightgbm as lgb
-from collections import defaultdict
 
 from normalization import normalize_business_name, normalize_address
 from blocking import CountryBlocker
 from features import compute_pair_features, FEATURE_NAMES
 from decision import should_accept_pair, should_skip_pair
 
+# Worker Process Global State
+_WORKER_BLOCKER = None
+_WORKER_TARGETS = None
+_WORKER_MODEL = None
+_WORKER_THRESHOLD = 0.70
+_WORKER_COUNTRY = None
 
-def load_batch_targets(target_db: sqlite3.Connection, candidate_ids: set, country: str) -> dict:
-    """Read and normalise only targets needed by one S1 batch.
 
-    Keeping every normalised S2/S3 record in a Python dictionary is what made
-    large countries exceed RAM.  The blocker stays in memory, while this
-    bounded cache is rebuilt for each batch.
-    """
-    records = {}
-    candidate_ids = list(candidate_ids)
-    for start in range(0, len(candidate_ids), 900):
-        chunk = candidate_ids[start:start + 900]
-        placeholders = ",".join("?" for _ in chunk)
-        query = f"SELECT entity_id, business_name, business_address FROM targets WHERE entity_id IN ({placeholders})"
-        for entity_id, name, address in target_db.execute(query, chunk):
-            records[entity_id] = {
-                "name": normalize_business_name(name),
-                "addr": normalize_address(address, country),
-            }
-    return records
+def init_worker(blocker, targets, model_path: str, threshold: float, country: str):
+    """Initialize worker process with shared in-memory blocker, targets, and model."""
+    global _WORKER_BLOCKER, _WORKER_TARGETS, _WORKER_MODEL, _WORKER_THRESHOLD, _WORKER_COUNTRY
+    _WORKER_BLOCKER = blocker
+    _WORKER_TARGETS = targets
+    _WORKER_THRESHOLD = threshold
+    _WORKER_COUNTRY = country
+    # Initialize LightGBM booster with num_threads=1 to prevent CPU oversubscription across workers
+    _WORKER_MODEL = lgb.Booster(model_file=model_path)
+
+
+def process_s1_chunk(chunk: list) -> list:
+    """Process a chunk of Source 1 entities across candidates and decision rules."""
+    chunk_results = []
+
+    for row_index, s1_id, s1_name, s1_addr in chunk:
+        s1_n = normalize_business_name(s1_name)
+        s1_a = normalize_address(s1_addr, _WORKER_COUNTRY)
+        s1_norm = {
+            'name': s1_n,
+            'addr': s1_a,
+            'country': _WORKER_COUNTRY,
+        }
+
+        cands = _WORKER_BLOCKER.retrieve_candidates(s1_name, s1_addr)
+
+        features = []
+        c_nodes = []
+        for cid in cands:
+            cn = _WORKER_TARGETS.get(cid)
+            if cn is None or should_skip_pair(s1_norm, cn):
+                continue
+            features.append(compute_pair_features(s1_norm, cn, cid))
+            c_nodes.append((cid, cn))
+
+        matched = []
+        if features:
+            X = np.asarray(features, dtype=np.float32)
+            probs = _WORKER_MODEL.predict(X, num_threads=1)
+            for (cid, cn), prob in zip(c_nodes, probs):
+                if should_accept_pair(s1_norm, cn, prob, _WORKER_THRESHOLD):
+                    matched.append(cid)
+
+        all_cands = sorted(set(cands) | set(matched))
+        chunk_results.append((row_index, s1_id, ",".join(matched), ",".join(all_cands)))
+
+    return chunk_results
 
 
 def run_pipeline(
@@ -52,9 +90,10 @@ def run_pipeline(
     output_dir: str = "output",
     model_path: str = None,
     meta_path: str = None,
-    threshold: float = 0.70,
-    batch_size: int = 1000,
+    threshold: float = 0.69,
+    batch_size: int = 5000,
     max_candidates: int = 25,
+    num_workers: int = None,
 ):
     start_time = time.time()
     os.makedirs(output_dir, exist_ok=True)
@@ -65,9 +104,6 @@ def run_pipeline(
     if meta_path is None:
         meta_path = os.path.join(src_dir, "model_meta.pkl")
 
-    print(f"Loading LightGBM model from {model_path}...")
-    model = lgb.Booster(model_file=model_path)
-
     if os.path.exists(meta_path):
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
@@ -75,241 +111,211 @@ def run_pipeline(
             expected_features = meta.get("feature_names")
             if expected_features != FEATURE_NAMES:
                 raise RuntimeError(
-                    "Model metadata does not match the active feature contract. "
-                    "Retrain with src/train.py before inference."
+                    "Model metadata does not match active feature contract. Retrain with src/train.py."
                 )
-    if model.num_feature() != len(FEATURE_NAMES) or model.feature_name() != FEATURE_NAMES:
-        raise RuntimeError(
-            "LightGBM model does not match the active feature contract. "
-            "Retrain with src/train.py before inference."
-        )
-    print(f"Using Base Decision Threshold: {threshold:.2f}")
+
+    # Validate model integrity
+    test_booster = lgb.Booster(model_file=model_path)
+    if test_booster.num_feature() != len(FEATURE_NAMES) or test_booster.feature_name() != FEATURE_NAMES:
+        raise RuntimeError("LightGBM model does not match active feature contract.")
+    del test_booster
+
+    # Configure worker pool
+    cpu_count = os.cpu_count() or 1
+    if num_workers is None or num_workers < 1:
+        num_workers = max(1, cpu_count - 2) if cpu_count > 4 else cpu_count
+
+    print("==================================================")
+    print(" Amazon ML Challenge 2026 - Parallel Inference")
+    print("==================================================")
+    print(f" LightGBM Model:       {model_path}")
+    print(f" Decision Threshold:   {threshold:.2f}")
+    print(f" CPU Cores Available:  {cpu_count}")
+    print(f" Worker Processes:     {num_workers}")
+    print(f" Batch / Chunk Size:   {batch_size}")
+    print(f" Max Candidates:       {max_candidates}")
+    print("==================================================")
 
     s1_path = os.path.join(test_dir, "test_source1.tsv")
-    print(f"Reading test entities from {s1_path}...")
+    print(f"\n[1/3] Reading test Source 1 entities from {s1_path}...")
 
     s1_by_country = defaultdict(list)
+    total_s1_records = 0
 
     with open(s1_path, "r", encoding="utf-8") as f:
         next(f)
         for row_index, line in enumerate(f):
             parts = line.strip().split("\t")
             if len(parts) >= 4:
-                eid = parts[0]
-                s1_by_country[parts[3]].append((row_index, eid, parts[1], parts[2]))
+                eid, name, addr, country = parts[0], parts[1], parts[2], parts[3]
+                s1_by_country[country].append((row_index, eid, name, addr))
+                total_s1_records += 1
 
-    print(f"Total S1 entities: {sum(len(records) for records in s1_by_country.values())}")
-    print(f"Country breakdown: { {k: len(v) for k, v in s1_by_country.items()} }")
+    print(f" Total S1 Entities: {total_s1_records:,}")
+    for c, records in sorted(s1_by_country.items()):
+        print(f"   - {c:10s}: {len(records):,} entities")
 
-    # Results are hundreds of MB.  Keeping them in Python dictionaries along
-    # with an active country index causes avoidable memory pressure.  SQLite is
-    # used only as a temporary ordered spool and is deleted after final TSVs
-    # have been streamed.
-    cache_path = os.path.join(output_dir, ".inference_results.sqlite3")
-    if os.path.exists(cache_path):
-        os.remove(cache_path)
-    result_db = sqlite3.connect(cache_path)
-    result_db.execute("PRAGMA journal_mode=OFF")
-    result_db.execute("PRAGMA synchronous=OFF")
-    result_db.execute(
-        "CREATE TABLE results (row_index INTEGER PRIMARY KEY, source_id TEXT, matches TEXT, candidates TEXT)"
-    )
-
-    countries_order = sorted(s1_by_country.keys(), key=lambda c: 0 if c == 'France' else (1 if c == 'US' else 2))
-
+    # Allocate final results buffer (index-aligned for zero-overhead streaming)
+    all_results = [None] * total_s1_records
     total_matches_count = 0
     total_singletons_count = 0
+
+    countries_order = sorted(s1_by_country.keys(), key=lambda c: 0 if c == 'France' else (1 if c == 'US' else 2))
 
     for country in countries_order:
         country_start = time.time()
         s1_records = s1_by_country[country]
-        print(f"\n==================================================")
-        print(f" Processing Country: {country} ({len(s1_records)} entities)")
-        print(f"==================================================")
+        print(f"\n[2/3] Processing Country: {country} ({len(s1_records):,} entities)")
 
-        # 1. Index all targets.  Raw target fields are spooled to a temporary
-        # SQLite table; only candidates from the active S1 batch are held as
-        # normalised Python objects.
+        # Step 1: Pre-load and normalize all target records for this country in memory
+        target_records = {}
         blocker = CountryBlocker(country, max_candidates=max_candidates, max_freq=2500)
-        target_cache_path = os.path.join(output_dir, f".targets_{country.lower()}.sqlite3")
-        if os.path.exists(target_cache_path):
-            os.remove(target_cache_path)
-        target_db = sqlite3.connect(target_cache_path)
-        target_db.execute("PRAGMA journal_mode=OFF")
-        target_db.execute("PRAGMA synchronous=OFF")
-        target_db.execute("CREATE TABLE targets (entity_id TEXT PRIMARY KEY, business_name TEXT, business_address TEXT)")
 
         for fn in ["test_source2.tsv", "test_source3.tsv"]:
             fn_path = os.path.join(test_dir, fn)
-            print(f"Indexing {fn} for {country}...")
+            print(f"  Indexing targets from {fn} for {country}...")
             count = 0
-            insert_rows = []
             with open(fn_path, "r", encoding="utf-8") as f:
                 next(f)
                 for line in f:
                     parts = line.strip().split("\t")
                     if len(parts) >= 4 and parts[3] == country:
-                        eid = parts[0]
-                        name = parts[1]
-                        addr = parts[2]
+                        eid, name, addr = parts[0], parts[1], parts[2]
                         blocker.add_target_record(eid, name, addr)
-                        insert_rows.append((eid, name, addr))
-                        if len(insert_rows) >= 10000:
-                            target_db.executemany(
-                                "INSERT INTO targets (entity_id, business_name, business_address) VALUES (?, ?, ?)", insert_rows
-                            )
-                            insert_rows.clear()
+                        target_records[eid] = {
+                            "name": normalize_business_name(name),
+                            "addr": normalize_address(addr, country),
+                        }
                         count += 1
-            if insert_rows:
-                target_db.executemany(
-                    "INSERT INTO targets (entity_id, business_name, business_address) VALUES (?, ?, ?)", insert_rows
-                )
-            target_db.commit()
-            print(f"  Indexed {count} records from {fn}.")
+            print(f"    Indexed {count:,} records from {fn}.")
 
-        target_count = target_db.execute("SELECT COUNT(*) FROM targets").fetchone()[0]
-        print(f"Total target records indexed for {country}: {target_count}")
+        print(f"  Total target records in memory: {len(target_records):,}")
 
-        # 2. Batch score candidates with early-exit and multi-tiered decision rules
+        # Step 2: Slice S1 records into chunks
+        chunks = [
+            s1_records[i: i + batch_size]
+            for i in range(0, len(s1_records), batch_size)
+        ]
+        print(f"  Dispatched {len(chunks)} chunks across {num_workers} parallel workers...")
+
         country_matches = 0
         country_singletons = 0
+        processed_entities = 0
 
-        for b_idx in range(0, len(s1_records), batch_size):
-            batch_records = s1_records[b_idx: b_idx + batch_size]
+        # Step 3: Execute in parallel across worker processes
+        with ProcessPoolExecutor(
+            max_workers=num_workers,
+            initializer=init_worker,
+            initargs=(blocker, target_records, model_path, threshold, country),
+        ) as executor:
+            future_to_chunk = {
+                executor.submit(process_s1_chunk, chunk): len(chunk)
+                for chunk in chunks
+            }
 
-            batch_pair_features = []
-            batch_pair_indices = []
-            batch_candidates = []
-            batch_s1_norms = []
-            batch_candidate_ids = set()
+            for future in as_completed(future_to_chunk):
+                chunk_len = future_to_chunk[future]
+                chunk_res = future.result()
 
-            for rec_i, (_, s1_id, s1_name, s1_addr) in enumerate(batch_records):
-                s1_n = normalize_business_name(s1_name)
-                s1_a = normalize_address(s1_addr, country)
-                s1_norm = {
-                    'name': s1_n,
-                    'addr': s1_a,
-                    'country': country,
-                }
-                batch_s1_norms.append(s1_norm)
+                for row_idx, s1_id, matches_str, cands_str in chunk_res:
+                    all_results[row_idx] = (s1_id, matches_str, cands_str)
+                    if matches_str:
+                        country_matches += len(matches_str.split(","))
+                    else:
+                        country_singletons += 1
 
-                cands = blocker.retrieve_candidates(s1_name, s1_addr)
-                batch_candidates.append(cands)
-                batch_candidate_ids.update(cands)
-
-            target_records = load_batch_targets(target_db, batch_candidate_ids, country)
-
-            for rec_i, cands in enumerate(batch_candidates):
-                s1_norm = batch_s1_norms[rec_i]
-                for cid in cands:
-                    if cid in target_records:
-                        cn = target_records[cid]
-
-                        if should_skip_pair(s1_norm, cn):
-                            continue
-
-                        feat = compute_pair_features(s1_norm, cn, cid)
-                        batch_pair_features.append(feat)
-                        batch_pair_indices.append((rec_i, cid, cn))
-
-            # Batch inference with LightGBM
-            matched_dict = defaultdict(list)
-            if batch_pair_features:
-                X_batch = np.array(batch_pair_features, dtype=np.float32)
-                probs = model.predict(X_batch)
-
-                for (rec_i, cid, cn), prob in zip(batch_pair_indices, probs):
-                    if should_accept_pair(batch_s1_norms[rec_i], cn, prob, threshold):
-                        matched_dict[rec_i].append(cid)
-
-            # Store predictions
-            result_rows = []
-            for rec_i, (row_index, s1_id, _, _) in enumerate(batch_records):
-                cands = batch_candidates[rec_i]
-                matches = matched_dict.get(rec_i, [])
-
-                all_cands = sorted(set(cands) | set(matches))
-                result_rows.append((row_index, s1_id, ",".join(matches), ",".join(all_cands)))
-
-                if matches:
-                    country_matches += len(matches)
-                else:
-                    country_singletons += 1
-
-            result_db.executemany(
-                "INSERT INTO results (row_index, source_id, matches, candidates) VALUES (?, ?, ?, ?)", result_rows
-            )
-            result_db.commit()
-
-            processed = b_idx + len(batch_records)
-            if processed % 100000 == 0 or processed == len(s1_records):
+                processed_entities += chunk_len
                 elapsed = time.time() - country_start
-                rate = processed / elapsed if elapsed > 0 else 0
-                print(f"  Processed {processed}/{len(s1_records)} ({rate:.1f} ent/s). "
-                      f"Singletons: {country_singletons}")
+                rate = processed_entities / max(elapsed, 0.001)
+                remaining = len(s1_records) - processed_entities
+                eta_sec = remaining / max(rate, 1)
+
+                if processed_entities % (batch_size * 5) == 0 or processed_entities == len(s1_records):
+                    print(
+                        f"    Progress: {processed_entities:,}/{len(s1_records):,} "
+                        f"({rate:.1f} ent/s, ETA: {eta_sec:.0f}s) | "
+                        f"Matches: {country_matches:,} | Singletons: {country_singletons:,}"
+                    )
 
         total_matches_count += country_matches
         total_singletons_count += country_singletons
-        print(f"Completed {country} in {time.time()-country_start:.1f}s.")
+        print(f"  Finished {country} in {time.time()-country_start:.1f}s.")
 
+        # Release country memory
         del target_records
         del blocker
-        target_db.close()
-        os.remove(target_cache_path)
+        gc.collect()
 
-    # 3. Stream outputs in exact original test_source1.tsv order.
+    # Step 4: Stream final outputs in exact line-for-line order matching test_source1.tsv
     matching_file = os.path.join(output_dir, "matching_results.tsv")
     candidate_file = os.path.join(output_dir, "candidate_pairs.tsv")
 
-    print(f"\nWriting final outputs in exact original test_source1.tsv order...")
+    print(f"\n[3/3] Writing final submission files...")
     with open(matching_file, "w", encoding="utf-8") as f_m, \
          open(candidate_file, "w", encoding="utf-8") as f_c:
 
         f_m.write("source1_entity_id\tmatched_entity_ids\n")
         f_c.write("source1_entity_id\tcandidate_entity_ids\n")
 
-        for s1_id, matches, candidates in result_db.execute(
-            "SELECT source_id, matches, candidates FROM results ORDER BY row_index"
-        ):
-            f_m.write(f"{s1_id}\t{matches}\n")
-            f_c.write(f"{s1_id}\t{candidates}\n")
+        for row_idx, res in enumerate(all_results):
+            if res is None:
+                raise RuntimeError(f"Missing prediction at row {row_idx}! Pipeline integrity violated.")
+            s1_id, matches_str, cands_str = res
+            f_m.write(f"{s1_id}\t{matches_str}\n")
+            f_c.write(f"{s1_id}\t{cands_str}\n")
 
-    result_db.close()
-    os.remove(cache_path)
-
-    print(f"==================================================")
-    print(f" Pipeline Finished Successfully in {time.time()-start_time:.1f}s!")
-    print(f" Total Source 1 Entities: {sum(len(records) for records in s1_by_country.values())}")
-    print(f" Total Matches Predicted: {total_matches_count}")
-    total_source1 = sum(len(records) for records in s1_by_country.values())
-    print(f" Total Singletons: {total_singletons_count} ({total_singletons_count/total_source1*100:.2f}%)")
-    print(f" Average Matches per S1 Entity: {total_matches_count/total_source1:.2f}")
-    print(f" Output files written to:")
+    total_time = time.time() - start_time
+    print("==================================================")
+    print(f" Inference Finished Successfully in {total_time:.1f}s ({total_time/60:.1f} mins)!")
+    print(f" Total Source 1 Entities:   {total_s1_records:,}")
+    print(f" Total Matches Predicted:   {total_matches_count:,}")
+    print(f" Total Singletons:          {total_singletons_count:,} ({total_singletons_count/total_s1_records*100:.2f}%)")
+    print(f" Average Matches / Entity:  {total_matches_count/total_s1_records:.2f}")
+    print(f" Average Throughput:        {total_s1_records/max(total_time, 0.001):.1f} ent/s")
+    print(f" Outputs:")
     print(f"   - {matching_file}")
     print(f"   - {candidate_file}")
-    print(f"==================================================")
+    print("==================================================")
+
+    # Automated Validation Check
+    validator_script = os.path.join(test_dir, "../../utils/validate_submission.py")
+    if os.path.exists(validator_script):
+        print("\nRunning official submission validator...")
+        os.system(
+            f"{sys.executable} {validator_script} "
+            f"--matching {matching_file} "
+            f"--candidate {candidate_file} "
+            f"--test-dir {test_dir}"
+        )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run precision-first entity resolution inference.")
-    parser.add_argument("--test-dir", default="DATA/student_resource/dataset/test")
-    parser.add_argument("--output-dir", default="output")
-    parser.add_argument("--model-path", default=None)
-    parser.add_argument("--meta-path", default=None)
-    parser.add_argument("--batch-size", type=int, default=1000,
-                        help="S1 records per scoring batch; raise only when RAM permits.")
+    parser = argparse.ArgumentParser(description="High-Throughput Business Entity Resolution Inference Pipeline.")
+    parser.add_argument("--test-dir", default="DATA/student_resource/dataset/test",
+                        help="Path to test dataset directory.")
+    parser.add_argument("--output-dir", default="output",
+                        help="Directory to save final TSV files.")
+    parser.add_argument("--model-path", default=None,
+                        help="Path to trained LightGBM model file.")
+    parser.add_argument("--meta-path", default=None,
+                        help="Path to model metadata file.")
+    parser.add_argument("--batch-size", type=int, default=5000,
+                        help="Number of S1 records per worker task chunk.")
     parser.add_argument("--max-candidates", type=int, default=25,
-                        help="Maximum final-stage candidates per Source 1 record.")
+                        help="Maximum candidate target records retained per S1 entity.")
+    parser.add_argument("--num-workers", type=int, default=None,
+                        help="Number of worker processes. Default: max(1, CPU cores - 2).")
+    parser.add_argument("--threshold", type=float, default=0.69,
+                        help="Decision threshold overriding metadata.")
+
     args = parser.parse_args()
-    if args.batch_size < 1:
-        parser.error("--batch-size must be positive")
-    if args.max_candidates < 1:
-        parser.error("--max-candidates must be positive")
     run_pipeline(
         test_dir=args.test_dir,
         output_dir=args.output_dir,
         model_path=args.model_path,
         meta_path=args.meta_path,
+        threshold=args.threshold,
         batch_size=args.batch_size,
         max_candidates=args.max_candidates,
+        num_workers=args.num_workers,
     )

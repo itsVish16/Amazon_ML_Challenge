@@ -80,6 +80,14 @@ ORDINALS = {
     '9th': '9', 'ninth': '9', '10th': '10', 'tenth': '10'
 }
 
+STATE_WORDS = set(US_STATES.values()) | set(US_STATES.keys()) | set(INDIA_STATES.values()) | set(INDIA_STATES.keys())
+STOP_ADDR = {
+    'road', 'street', 'avenue', 'boulevard', 'lane', 'drive', 'court',
+    'place', 'parkway', 'highway', 'way', 'rue', 'unit', 'apartment',
+    'floor', 'suite', 'bldg', 'near', 'opp', 'sector', 'block', 'plot',
+    'null', 'city', 'township', 'region', 'state', 'hq', 'no'
+}
+
 
 def strip_accents(text: str) -> str:
     """Strip diacritics and accents."""
@@ -230,11 +238,7 @@ def normalize_address(raw_addr: str, country: str = "") -> dict:
 
     primary_number = numbers[0] if numbers else ''
 
-    stop_addr = {'road', 'street', 'avenue', 'boulevard', 'lane', 'drive', 'court',
-                 'place', 'parkway', 'highway', 'way', 'rue', 'unit', 'apartment',
-                 'floor', 'suite', 'bldg', 'near', 'opp', 'sector', 'block', 'plot',
-                 'null', 'city', 'township', 'region', 'state', 'hq', 'no'}
-    street_tokens = [w for w in normalized_words if w not in stop_addr and len(w) > 2 and not w.isdigit()]
+    street_tokens = [w for w in normalized_words if w not in STOP_ADDR and w not in STATE_WORDS and len(w) > 2 and not w.isdigit()]
 
     return {
         'clean_addr': clean_addr,
