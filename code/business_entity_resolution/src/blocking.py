@@ -122,16 +122,12 @@ class CountryBlocker:
         # frequent keys that means the retained candidates depended on source
         # file order, not match evidence.  Score each ID by independent
         # blocking signals, while keeping a small bounded pre-selection pool.
-        candidates: Dict[str, float] = {}
-        candidate_cap = max(self.max_candidates * 10, 250)
+        candidates = defaultdict(float)
         for freq, k in scored:
             if freq > self.max_freq:
                 continue
             key_weight = 1.0 / (1.0 + freq)
             for cid in self.index[k]:
-                if cid in candidates:
-                    candidates[cid] += key_weight
-                elif len(candidates) < candidate_cap:
-                    candidates[cid] = key_weight
+                candidates[cid] += key_weight
 
         return [cid for cid, _ in sorted(candidates.items(), key=lambda item: (-item[1], item[0]))[:self.max_candidates]]

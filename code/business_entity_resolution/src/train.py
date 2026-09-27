@@ -63,7 +63,20 @@ def _read_labels(path: str, selected_ids: set) -> tuple[dict, set]:
 
 
 def _read_target_pool(data_dir: str, positive_ids: set, background_samples: int, seed: int) -> dict:
-    """All sampled positives plus representative S2/S3-country background."""
+    """All sampled positives plus representative S2/S3-country background (or complete targets if background_samples <= 0)."""
+    if background_samples <= 0:
+        targets = {}
+        for filename in ("train_source2.tsv", "train_source3.tsv"):
+            path = os.path.join(data_dir, filename)
+            print(f"Loading full target universe from {filename}...")
+            with open(path, "r", encoding="utf-8") as handle:
+                next(handle)
+                for line in handle:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) >= 4:
+                        targets[parts[0]] = (parts[1], parts[2], parts[3])
+        return targets
+
     rng = random.Random(seed)
     targets, reservoirs, seen = {}, defaultdict(list), defaultdict(int)
     per_group_cap = max(1, background_samples // 4)
@@ -220,6 +233,8 @@ if __name__ == "__main__":
     parser.add_argument("--data-dir", default="DATA/student_resource/dataset/train")
     parser.add_argument("--s1-samples", type=int, default=50000)
     parser.add_argument("--background-samples", type=int, default=200000)
+    parser.add_argument("--full-targets", action="store_true", help="Index entire train target universe for hard-negative training")
     parser.add_argument("--seed", type=int, default=20260927)
     arguments = parser.parse_args()
-    train_matching_model(arguments.data_dir, arguments.s1_samples, arguments.background_samples, arguments.seed)
+    bg_samples = 0 if arguments.full_targets else arguments.background_samples
+    train_matching_model(arguments.data_dir, arguments.s1_samples, bg_samples, arguments.seed)

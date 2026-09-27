@@ -17,13 +17,11 @@ RE_NOISE_PREFIX = re.compile(r'^[#<>\-\*\@\s]+')
 RE_PMB_POBOX = re.compile(r'\b(pmb|p\s*o\s*box|po\s*box)\s*[0-9a-z\-]+', re.IGNORECASE)
 RE_UNIT_APARTMENT = re.compile(r'\b(unit|apt|apartment|suite|ste|flr|floor|bldg|building|kh\s*no\.?|house\s*no\.?)\b', re.IGNORECASE)
 
-# Legal Suffixes across US, India, and France
+# True Corporate Legal Suffixes across US, India, and France
 LEGAL_SUFFIXES = {
     'inc', 'incorporated', 'llc', 'corp', 'corporation', 'co', 'company',
     'ltd', 'limited', 'pvt ltd', 'pvt limited', 'private limited', 'pvt',
-    'llp', 'associates', 'holdings', 'enterprises', 'trading', 'center',
-    'services', 'partners', 'group', 'sarl', 'sasu', 'sas', 'eurl',
-    'sa', 'sci', 'snc', 'fils', 'et fils'
+    'llp', 'sarl', 'sasu', 'sas', 'eurl', 'sa', 'sci', 'snc', 'fils', 'et fils'
 }
 
 # Standard Street Suffix Canonicalization

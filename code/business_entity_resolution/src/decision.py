@@ -60,22 +60,24 @@ def should_accept_pair(source_norm: dict, candidate_norm: dict, probability: flo
     source_compact = source_norm['name'].get('compact_name', '')
     domain_match = bool(candidate_domain and len(candidate_domain) >= 5 and candidate_domain in source_compact)
 
-    # Anchor 1: Exact clean name + compatible address (no number conflict, no street conflict, no state conflict)
+    # Anchor 1: Exact clean name + positive corroboration (or long distinctive name)
     if source_name and source_name == candidate_name and len(source_name) >= 4:
+        has_num_corrob = bool(source_nums and candidate_nums and (source_nums & candidate_nums))
+        has_st_corrob = bool(source_streets and candidate_streets and (source_streets & candidate_streets))
         if not number_conflict and not street_conflict and not state_conflict:
-            return True
+            if has_num_corrob or has_st_corrob or len(source_name) >= 15:
+                return True
 
     # Anchor 2: Domain match with compatible address
     if domain_match and not number_conflict and not state_conflict and not street_conflict:
         return True
 
-    if probability < threshold:
+    # Minimum name similarity: different businesses in the same building/mall cannot be merged
+    if not domain_match and name_similarity < 0.55:
         return False
 
-    name_similarity = max(
-        fuzz.token_sort_ratio(source_name, candidate_name),
-        fuzz.token_set_ratio(source_name, candidate_name),
-    ) / 100.0
+    if probability < threshold:
+        return False
 
     # Rule 1: A hard address number conflict cannot be accepted without domain match
     if number_conflict and not (domain_match and name_similarity >= 0.95):
@@ -93,10 +95,6 @@ def should_accept_pair(source_norm: dict, candidate_norm: dict, probability: flo
 
     # Rule 3: Missing address requires high name similarity
     if (not source_addr or not candidate_addr) and name_similarity < 0.75:
-        return False
-
-    # Rule 4: Low name similarity requires matching address numbers
-    if name_similarity < 0.40 and not (source_nums and candidate_nums and (source_nums & candidate_nums)):
         return False
 
     return True

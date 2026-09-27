@@ -94,7 +94,8 @@ def process_s1_chunk(chunk: list) -> list:
                 if should_accept_pair(s1_norm, cn, prob, _WORKER_THRESHOLD):
                     matched.append(cid)
 
-        all_cands = sorted(set(cands) | set(matched))
+        scored_cands = [cid for cid, _ in c_nodes]
+        all_cands = sorted(set(scored_cands) | set(matched))
         chunk_results.append((row_index, s1_id, ",".join(matched), ",".join(all_cands)))
 
     return chunk_results
