@@ -29,7 +29,7 @@ import lightgbm as lgb
 from normalization import normalize_business_name, normalize_address
 from blocking import CountryBlocker
 from features import compute_pair_features, FEATURE_NAMES
-from decision import should_accept_pair, should_skip_pair
+from decision import should_skip_pair, select_matches
 
 # Worker Process Global State (inherited automatically via fork on Linux)
 _WORKER_BLOCKER = None
@@ -87,15 +87,16 @@ def process_s1_chunk(chunk: list) -> list:
             c_nodes.append((cid, cn))
 
         matched = []
+        scored_cands_list = []
         if features:
             X = np.asarray(features, dtype=np.float32)
             probs = _WORKER_MODEL.predict(X, num_threads=1)
-            for (cid, cn), prob in zip(c_nodes, probs):
-                if should_accept_pair(s1_norm, cn, prob, _WORKER_THRESHOLD):
-                    matched.append(cid)
+            scored_cands_list = [
+                (cid, cn, float(prob)) for (cid, cn), prob in zip(c_nodes, probs)
+            ]
+            matched = select_matches(s1_norm, scored_cands_list, _WORKER_THRESHOLD)
 
-        scored_cands = [cid for cid, _ in c_nodes]
-        all_cands = sorted(set(scored_cands) | set(matched))
+        all_cands = sorted(set(cid for cid, _, _ in scored_cands_list) | set(matched))
         chunk_results.append((row_index, s1_id, ",".join(matched), ",".join(all_cands)))
 
     return chunk_results
