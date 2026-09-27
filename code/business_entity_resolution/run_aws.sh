@@ -7,12 +7,14 @@ DATA_DIR="${DATA_DIR:-${PROJECT_DIR}/DATA/student_resource/dataset}"
 OUTPUT_DIR="${OUTPUT_DIR:-${PROJECT_DIR}/output}"
 
 # Tuning Parameters
-BATCH_SIZE="${BATCH_SIZE:-5000}"
+BATCH_SIZE="${BATCH_SIZE:-2500}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-25}"
 NUM_WORKERS="${NUM_WORKERS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
-# Cap workers to leave 2 cores free for OS / I/O if high core count
-if [ "${NUM_WORKERS}" -gt 4 ]; then
+# Cap workers to 32 for optimal memory safety and sustained multi-core throughput
+if [ "${NUM_WORKERS}" -gt 32 ]; then
+  NUM_WORKERS=32
+elif [ "${NUM_WORKERS}" -gt 4 ]; then
   NUM_WORKERS=$((NUM_WORKERS - 2))
 fi
 
