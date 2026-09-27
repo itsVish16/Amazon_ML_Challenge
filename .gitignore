@@ -1,0 +1,11 @@
+# Challenge data and generated submission artifacts stay off GitHub.
+DATA/
+output/
+*.zip
+.DS_Store
+
+# Python/runtime artifacts
+__pycache__/
+*.py[cod]
+.venv/
+*.sqlite3
