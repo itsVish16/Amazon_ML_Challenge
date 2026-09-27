@@ -41,6 +41,8 @@ STREET_MAP = {
     'ter': 'terrace', 'terrace': 'terrace',
     'rue': 'rue', 'r': 'rue',
     'voie': 'voie', 'allee': 'allee', 'passage': 'passage',
+    'chemin': 'chemin', 'ch': 'chemin',
+    'impasse': 'impasse', 'imp': 'impasse',
 }
 
 # Complete US State and Territory Mapping
@@ -93,6 +95,53 @@ INDIA_STATES = {
 INDIA_MULTI_STATES = [k for k in sorted(INDIA_STATES.keys(), key=lambda x: -len(x)) if ' ' in k]
 INDIA_SINGLE_STATES = {k: v for k, v in INDIA_STATES.items() if ' ' not in k and len(k) > 2}
 
+# Complete French Region, Department, and City Canonical Mapping
+FRANCE_REGIONS = {
+    # 3 Main Regions in Competition Dataset
+    'hauts de france': 'hauts-de-france',
+    'nouvelle aquitaine': 'nouvelle-aquitaine',
+    'pays de la loire': 'pays de la loire',
+    'ile de france': 'ile-de-france',
+    'auvergne rhone alpes': 'auvergne-rhone-alpes',
+    'provence alpes cote d azur': 'provence-alpes-cote-d-azur',
+    'occitanie': 'occitanie',
+    'grand est': 'grand est',
+    'bretagne': 'bretagne',
+    'normandie': 'normandie',
+    'bourgogne franche comte': 'bourgogne-franche-comte',
+    'centre val de loire': 'centre-val-de-loire',
+    'corse': 'corse',
+
+    # French Departments -> Canonical Region
+    'nord': 'hauts-de-france',
+    'pas de calais': 'hauts-de-france',
+    'gironde': 'nouvelle-aquitaine',
+    'loire atlantique': 'pays de la loire',
+
+    # Cities in Hauts-de-France -> Canonical Region
+    'lille': 'hauts-de-france',
+    'tourcoing': 'hauts-de-france',
+    'dunkerque': 'hauts-de-france',
+    'roubaix': 'hauts-de-france',
+    'calais': 'hauts-de-france',
+
+    # Cities in Nouvelle-Aquitaine -> Canonical Region
+    'bordeaux': 'nouvelle-aquitaine',
+    'pessac': 'nouvelle-aquitaine',
+    'merignac': 'nouvelle-aquitaine',
+    'la teste de buch': 'nouvelle-aquitaine',
+    'lege cap ferret': 'nouvelle-aquitaine',
+
+    # Cities in Pays de la Loire -> Canonical Region
+    'nantes': 'pays de la loire',
+    'saint nazaire': 'pays de la loire',
+    'pornic': 'pays de la loire',
+    'la baule escoublac': 'pays de la loire',
+    'saint herblain': 'pays de la loire',
+}
+FRANCE_MULTI_REGIONS = [k for k in sorted(FRANCE_REGIONS.keys(), key=lambda x: -len(x)) if ' ' in k]
+FRANCE_SINGLE_REGIONS = {k: v for k, v in FRANCE_REGIONS.items() if ' ' not in k and len(k) > 2}
+
 ORDINALS = {
     '1st': '1', 'first': '1', '2nd': '2', 'second': '2',
     '3rd': '3', 'third': '3', '4th': '4', 'fourth': '4',
@@ -104,6 +153,7 @@ ORDINALS = {
 STATE_WORDS = (
     set(US_STATES.keys()) | set(US_STATES.values()) |
     set(INDIA_STATES.keys()) | set(INDIA_STATES.values()) |
+    set(FRANCE_REGIONS.keys()) | set(FRANCE_REGIONS.values()) |
     {'india', 'usa', 'united', 'states', 'france'}
 )
 # Add individual tokens of multi-word states so they don't leak into street tokens
@@ -115,7 +165,8 @@ STOP_ADDR = {
     'road', 'street', 'avenue', 'boulevard', 'lane', 'drive', 'court',
     'place', 'parkway', 'highway', 'way', 'rue', 'unit', 'apartment',
     'floor', 'suite', 'bldg', 'near', 'opp', 'sector', 'block', 'plot',
-    'null', 'city', 'township', 'region', 'state', 'hq', 'no'
+    'null', 'city', 'township', 'region', 'state', 'hq', 'no',
+    'chemin', 'impasse', 'allee', 'passage', 'voie'
 }
 
 
@@ -274,6 +325,16 @@ def normalize_address(raw_addr: str, country: str = "") -> dict:
                     if i + 1 < len(normalized_words) and normalized_words[i + 1] in STOP_ADDR:
                         continue
                     canonical_state = US_SINGLE_STATES[w]
+                    break
+    elif country_upper == 'FRANCE':
+        for m in FRANCE_MULTI_REGIONS:
+            if f' {m} ' in padded_addr:
+                canonical_state = FRANCE_REGIONS[m]
+                break
+        if not canonical_state:
+            for w in reversed(normalized_words):
+                if w in FRANCE_SINGLE_REGIONS:
+                    canonical_state = FRANCE_SINGLE_REGIONS[w]
                     break
 
     # Extract all digit sequences (up to 6 digits) and strip leading zeros

@@ -147,8 +147,8 @@ def select_matches(source_norm: dict, scored_candidates: list, threshold: float)
             matched.append(cand_id)
             continue
 
-        # Tier 3: Domain match can bridge moderate probability
-        if domain_match and prob >= threshold * 0.85 and name_sim >= 0.30:
+        # Tier 3: Domain match can bridge moderate probability with solid name evidence
+        if domain_match and prob >= threshold * 0.90 and name_sim >= 0.60:
             matched.append(cand_id)
             continue
 

@@ -107,7 +107,7 @@ def run_pipeline(
     output_dir: str = "output",
     model_path: str = None,
     meta_path: str = None,
-    threshold: float = 0.69,
+    threshold: float = None,
     batch_size: int = 2500,
     max_candidates: int = 25,
     num_workers: int = None,
@@ -123,15 +123,19 @@ def run_pipeline(
     if meta_path is None:
         meta_path = os.path.join(src_dir, "model_meta.pkl")
 
+    meta_threshold = 0.89
     if os.path.exists(meta_path):
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
-            threshold = meta.get("threshold", threshold)
+            meta_threshold = meta.get("threshold", 0.89)
             expected_features = meta.get("feature_names")
             if expected_features != FEATURE_NAMES:
                 raise RuntimeError(
                     "Model metadata does not match active feature contract. Retrain with src/train.py."
                 )
+
+    if threshold is None:
+        threshold = meta_threshold
 
     # Validate model integrity
     test_booster = lgb.Booster(model_file=model_path)
@@ -339,7 +343,7 @@ if __name__ == "__main__":
                         help="Maximum candidate target records retained per S1 entity.")
     parser.add_argument("--num-workers", type=int, default=None,
                         help="Number of worker processes. Default: min(32, CPU cores - 2).")
-    parser.add_argument("--threshold", type=float, default=0.69,
+    parser.add_argument("--threshold", type=float, default=None,
                         help="Decision threshold overriding metadata.")
 
     args = parser.parse_args()
