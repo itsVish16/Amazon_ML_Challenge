@@ -3,12 +3,13 @@ High-Throughput Multi-Core Parallel Entity Resolution Inference Pipeline.
 Optimized for 64 vCPU & High-Memory Compute Instances (Nebius / Cloud / Local M-Series).
 
 Features:
-  1. Multi-Process Worker Pool (ProcessPoolExecutor) saturating all logical CPU cores.
-  2. Zero-Copy In-Memory Target & Inverted-Index Caching with OS Copy-On-Write sharing.
+  1. Instant Zero-Copy Memory Sharing on Linux via OS Fork (Copy-On-Write).
+  2. Multi-Process Worker Pool (multiprocessing.Pool) saturating all logical CPU cores.
   3. Microsecond early-exit filtering on disjoint house numbers and name tokens.
   4. Multi-Tiered Decision Engine with strict state-conflict and street-conflict pruning.
-  5. Exact row-for-row alignment matching test_source1.tsv.
-  6. Automated post-run validation with validate_submission.py.
+  5. Continuous live progress reporting on every single chunk with flush=True.
+  6. Exact row-for-row alignment matching test_source1.tsv.
+  7. Automated post-run validation with validate_submission.py.
 """
 
 import os
@@ -18,7 +19,7 @@ import math
 import gc
 import pickle
 import argparse
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
 from collections import defaultdict
 import numpy as np
 import lightgbm as lgb
@@ -28,22 +29,21 @@ from blocking import CountryBlocker
 from features import compute_pair_features, FEATURE_NAMES
 from decision import should_accept_pair, should_skip_pair
 
-# Worker Process Global State
+# Worker Process Global State (inherited automatically via fork on Linux)
 _WORKER_BLOCKER = None
 _WORKER_TARGETS = None
 _WORKER_MODEL = None
-_WORKER_THRESHOLD = 0.70
+_WORKER_THRESHOLD = 0.69
 _WORKER_COUNTRY = None
 
 
 def init_worker(blocker, targets, model_path: str, threshold: float, country: str):
-    """Initialize worker process with shared in-memory blocker, targets, and model."""
+    """Fallback initializer for non-fork platforms (macOS/Windows)."""
     global _WORKER_BLOCKER, _WORKER_TARGETS, _WORKER_MODEL, _WORKER_THRESHOLD, _WORKER_COUNTRY
     _WORKER_BLOCKER = blocker
     _WORKER_TARGETS = targets
     _WORKER_THRESHOLD = threshold
     _WORKER_COUNTRY = country
-    # Initialize LightGBM booster with num_threads=1 to prevent CPU oversubscription across workers
     _WORKER_MODEL = lgb.Booster(model_file=model_path)
 
 
@@ -95,6 +95,8 @@ def run_pipeline(
     max_candidates: int = 25,
     num_workers: int = None,
 ):
+    global _WORKER_BLOCKER, _WORKER_TARGETS, _WORKER_MODEL, _WORKER_THRESHOLD, _WORKER_COUNTRY
+
     start_time = time.time()
     os.makedirs(output_dir, exist_ok=True)
 
@@ -125,19 +127,19 @@ def run_pipeline(
     if num_workers is None or num_workers < 1:
         num_workers = max(1, cpu_count - 2) if cpu_count > 4 else cpu_count
 
-    print("==================================================")
-    print(" Amazon ML Challenge 2026 - Parallel Inference")
-    print("==================================================")
-    print(f" LightGBM Model:       {model_path}")
-    print(f" Decision Threshold:   {threshold:.2f}")
-    print(f" CPU Cores Available:  {cpu_count}")
-    print(f" Worker Processes:     {num_workers}")
-    print(f" Batch / Chunk Size:   {batch_size}")
-    print(f" Max Candidates:       {max_candidates}")
-    print("==================================================")
+    print("==================================================", flush=True)
+    print(" Amazon ML Challenge 2026 - Parallel Inference", flush=True)
+    print("==================================================", flush=True)
+    print(f" LightGBM Model:       {model_path}", flush=True)
+    print(f" Decision Threshold:   {threshold:.2f}", flush=True)
+    print(f" CPU Cores Available:  {cpu_count}", flush=True)
+    print(f" Worker Processes:     {num_workers}", flush=True)
+    print(f" Batch / Chunk Size:   {batch_size}", flush=True)
+    print(f" Max Candidates:       {max_candidates}", flush=True)
+    print("==================================================", flush=True)
 
     s1_path = os.path.join(test_dir, "test_source1.tsv")
-    print(f"\n[1/3] Reading test Source 1 entities from {s1_path}...")
+    print(f"\n[1/3] Reading test Source 1 entities from {s1_path}...", flush=True)
 
     s1_by_country = defaultdict(list)
     total_s1_records = 0
@@ -151,9 +153,9 @@ def run_pipeline(
                 s1_by_country[country].append((row_index, eid, name, addr))
                 total_s1_records += 1
 
-    print(f" Total S1 Entities: {total_s1_records:,}")
+    print(f" Total S1 Entities: {total_s1_records:,}", flush=True)
     for c, records in sorted(s1_by_country.items()):
-        print(f"   - {c:10s}: {len(records):,} entities")
+        print(f"   - {c:10s}: {len(records):,} entities", flush=True)
 
     # Allocate final results buffer (index-aligned for zero-overhead streaming)
     all_results = [None] * total_s1_records
@@ -162,10 +164,14 @@ def run_pipeline(
 
     countries_order = sorted(s1_by_country.keys(), key=lambda c: 0 if c == 'France' else (1 if c == 'US' else 2))
 
+    # Detect fork capability for instant Copy-On-Write memory sharing
+    use_fork = hasattr(mp, 'get_context') and (sys.platform.startswith('linux') or sys.platform == 'darwin')
+    pool_context = mp.get_context('fork') if use_fork else mp
+
     for country in countries_order:
         country_start = time.time()
         s1_records = s1_by_country[country]
-        print(f"\n[2/3] Processing Country: {country} ({len(s1_records):,} entities)")
+        print(f"\n[2/3] Processing Country: {country} ({len(s1_records):,} entities)", flush=True)
 
         # Step 1: Pre-load and normalize all target records for this country in memory
         target_records = {}
@@ -173,7 +179,7 @@ def run_pipeline(
 
         for fn in ["test_source2.tsv", "test_source3.tsv"]:
             fn_path = os.path.join(test_dir, fn)
-            print(f"  Indexing targets from {fn} for {country}...")
+            print(f"  Indexing targets from {fn} for {country}...", flush=True)
             count = 0
             with open(fn_path, "r", encoding="utf-8") as f:
                 next(f)
@@ -187,35 +193,40 @@ def run_pipeline(
                             "addr": normalize_address(addr, country),
                         }
                         count += 1
-            print(f"    Indexed {count:,} records from {fn}.")
+            print(f"    Indexed {count:,} records from {fn}.", flush=True)
 
-        print(f"  Total target records in memory: {len(target_records):,}")
+        print(f"  Total target records in memory: {len(target_records):,}", flush=True)
 
         # Step 2: Slice S1 records into chunks
         chunks = [
             s1_records[i: i + batch_size]
             for i in range(0, len(s1_records), batch_size)
         ]
-        print(f"  Dispatched {len(chunks)} chunks across {num_workers} parallel workers...")
+        print(f"  Dispatched {len(chunks)} chunks across {num_workers} parallel workers...", flush=True)
+
+        # Set parent globals before fork so child workers inherit them instantly via COW
+        _WORKER_BLOCKER = blocker
+        _WORKER_TARGETS = target_records
+        _WORKER_THRESHOLD = threshold
+        _WORKER_COUNTRY = country
+        _WORKER_MODEL = lgb.Booster(model_file=model_path)
 
         country_matches = 0
         country_singletons = 0
         processed_entities = 0
+        completed_chunks = 0
 
         # Step 3: Execute in parallel across worker processes
-        with ProcessPoolExecutor(
-            max_workers=num_workers,
-            initializer=init_worker,
-            initargs=(blocker, target_records, model_path, threshold, country),
-        ) as executor:
-            future_to_chunk = {
-                executor.submit(process_s1_chunk, chunk): len(chunk)
-                for chunk in chunks
-            }
+        pool_kwargs = {"processes": num_workers}
+        if not use_fork:
+            pool_kwargs["initializer"] = init_worker
+            pool_kwargs["initargs"] = (blocker, target_records, model_path, threshold, country)
 
-            for future in as_completed(future_to_chunk):
-                chunk_len = future_to_chunk[future]
-                chunk_res = future.result()
+        with pool_context.Pool(**pool_kwargs) as pool:
+            for chunk_res in pool.imap_unordered(process_s1_chunk, chunks):
+                completed_chunks += 1
+                chunk_len = len(chunk_res)
+                processed_entities += chunk_len
 
                 for row_idx, s1_id, matches_str, cands_str in chunk_res:
                     all_results[row_idx] = (s1_id, matches_str, cands_str)
@@ -224,24 +235,26 @@ def run_pipeline(
                     else:
                         country_singletons += 1
 
-                processed_entities += chunk_len
                 elapsed = time.time() - country_start
                 rate = processed_entities / max(elapsed, 0.001)
                 remaining = len(s1_records) - processed_entities
                 eta_sec = remaining / max(rate, 1)
 
-                if processed_entities % (batch_size * 5) == 0 or processed_entities == len(s1_records):
-                    print(
-                        f"    Progress: {processed_entities:,}/{len(s1_records):,} "
-                        f"({rate:.1f} ent/s, ETA: {eta_sec:.0f}s) | "
-                        f"Matches: {country_matches:,} | Singletons: {country_singletons:,}"
-                    )
+                print(
+                    f"    [{country}] Chunk {completed_chunks}/{len(chunks)} "
+                    f"({processed_entities:,}/{len(s1_records):,} ent) - "
+                    f"{rate:.1f} ent/s | Matches: {country_matches:,} | ETA: {eta_sec:.0f}s",
+                    flush=True
+                )
 
         total_matches_count += country_matches
         total_singletons_count += country_singletons
-        print(f"  Finished {country} in {time.time()-country_start:.1f}s.")
+        print(f"  Finished {country} in {time.time()-country_start:.1f}s.", flush=True)
 
         # Release country memory
+        _WORKER_BLOCKER = None
+        _WORKER_TARGETS = None
+        _WORKER_MODEL = None
         del target_records
         del blocker
         gc.collect()
@@ -250,7 +263,7 @@ def run_pipeline(
     matching_file = os.path.join(output_dir, "matching_results.tsv")
     candidate_file = os.path.join(output_dir, "candidate_pairs.tsv")
 
-    print(f"\n[3/3] Writing final submission files...")
+    print(f"\n[3/3] Writing final submission files...", flush=True)
     with open(matching_file, "w", encoding="utf-8") as f_m, \
          open(candidate_file, "w", encoding="utf-8") as f_c:
 
@@ -265,22 +278,22 @@ def run_pipeline(
             f_c.write(f"{s1_id}\t{cands_str}\n")
 
     total_time = time.time() - start_time
-    print("==================================================")
-    print(f" Inference Finished Successfully in {total_time:.1f}s ({total_time/60:.1f} mins)!")
-    print(f" Total Source 1 Entities:   {total_s1_records:,}")
-    print(f" Total Matches Predicted:   {total_matches_count:,}")
-    print(f" Total Singletons:          {total_singletons_count:,} ({total_singletons_count/total_s1_records*100:.2f}%)")
-    print(f" Average Matches / Entity:  {total_matches_count/total_s1_records:.2f}")
-    print(f" Average Throughput:        {total_s1_records/max(total_time, 0.001):.1f} ent/s")
-    print(f" Outputs:")
-    print(f"   - {matching_file}")
-    print(f"   - {candidate_file}")
-    print("==================================================")
+    print("==================================================", flush=True)
+    print(f" Inference Finished Successfully in {total_time:.1f}s ({total_time/60:.1f} mins)!", flush=True)
+    print(f" Total Source 1 Entities:   {total_s1_records:,}", flush=True)
+    print(f" Total Matches Predicted:   {total_matches_count:,}", flush=True)
+    print(f" Total Singletons:          {total_singletons_count:,} ({total_singletons_count/total_s1_records*100:.2f}%)", flush=True)
+    print(f" Average Matches / Entity:  {total_matches_count/total_s1_records:.2f}", flush=True)
+    print(f" Average Throughput:        {total_s1_records/max(total_time, 0.001):.1f} ent/s", flush=True)
+    print(f" Outputs:", flush=True)
+    print(f"   - {matching_file}", flush=True)
+    print(f"   - {candidate_file}", flush=True)
+    print("==================================================", flush=True)
 
     # Automated Validation Check
     validator_script = os.path.join(test_dir, "../../utils/validate_submission.py")
     if os.path.exists(validator_script):
-        print("\nRunning official submission validator...")
+        print("\nRunning official submission validator...", flush=True)
         os.system(
             f"{sys.executable} {validator_script} "
             f"--matching {matching_file} "
