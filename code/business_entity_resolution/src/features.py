@@ -109,8 +109,9 @@ def compute_pair_features(s1_norm: dict, cand_norm: dict, cand_id: str) -> list:
     s1_state = s1_a['canonical_state']
     c_state = c_a['canonical_state']
     if s1_state and c_state:
-        state_match = 1.0 if s1_state == c_state else -1.0
-        state_conflict = 1.0 if s1_state != c_state else 0.0
+        compatible = (s1_state == c_state) or ({s1_state, c_state} == {'telangana', 'andhra pradesh'})
+        state_match = 1.0 if compatible else -1.0
+        state_conflict = 0.0 if compatible else 1.0
     else:
         state_match = 0.0
         state_conflict = 0.0

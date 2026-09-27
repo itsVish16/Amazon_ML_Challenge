@@ -11,9 +11,9 @@ BATCH_SIZE="${BATCH_SIZE:-2500}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-25}"
 NUM_WORKERS="${NUM_WORKERS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
-# Cap workers to 32 for optimal memory safety and sustained multi-core throughput
-if [ "${NUM_WORKERS}" -gt 32 ]; then
-  NUM_WORKERS=32
+# Cap workers to 48 on 64 vCPU hosts for sustained high-throughput inference
+if [ "${NUM_WORKERS}" -gt 48 ]; then
+  NUM_WORKERS=48
 elif [ "${NUM_WORKERS}" -gt 4 ]; then
   NUM_WORKERS=$((NUM_WORKERS - 2))
 fi

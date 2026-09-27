@@ -45,32 +45,55 @@ STREET_MAP = {
     'voie': 'voie', 'allee': 'allee', 'passage': 'passage',
 }
 
-# US State Bidirectional Mapping
+# Complete US State and Territory Mapping
 US_STATES = {
-    'al': 'alabama', 'ak': 'alaska', 'az': 'arizona', 'ar': 'arkansas', 'ca': 'california',
-    'co': 'colorado', 'ct': 'connecticut', 'de': 'delaware', 'fl': 'florida', 'ga': 'georgia',
-    'hi': 'hawaii', 'id': 'idaho', 'il': 'illinois', 'in': 'indiana', 'ia': 'iowa',
-    'ks': 'kansas', 'ky': 'kentucky', 'la': 'louisiana', 'me': 'maine', 'md': 'maryland',
-    'ma': 'massachusetts', 'mi': 'michigan', 'mn': 'minnesota', 'ms': 'mississippi',
-    'mo': 'missouri', 'mt': 'montana', 'ne': 'nebraska', 'nv': 'nevada', 'nh': 'new hampshire',
-    'nj': 'new jersey', 'nm': 'new mexico', 'ny': 'new york', 'nc': 'north carolina',
-    'nd': 'north dakota', 'oh': 'ohio', 'ok': 'oklahoma', 'or': 'oregon', 'pa': 'pennsylvania',
-    'ri': 'rhode island', 'sc': 'south carolina', 'sd': 'south dakota', 'tn': 'tennessee',
-    'tx': 'texas', 'ut': 'utah', 'vt': 'vermont', 'va': 'virginia', 'wa': 'washington',
-    'wv': 'west virginia', 'wi': 'wisconsin', 'wy': 'wyoming', 'dc': 'district of columbia'
+    'al': 'al', 'ak': 'ak', 'az': 'az', 'ar': 'ar', 'ca': 'ca', 'co': 'co', 'ct': 'ct',
+    'de': 'de', 'fl': 'fl', 'ga': 'ga', 'hi': 'hi', 'id': 'id', 'il': 'il', 'in': 'in',
+    'ia': 'ia', 'ks': 'ks', 'ky': 'ky', 'la': 'la', 'me': 'me', 'md': 'md', 'ma': 'ma',
+    'mi': 'mi', 'mn': 'mn', 'ms': 'ms', 'mo': 'mo', 'mt': 'mt', 'ne': 'ne', 'nv': 'nv',
+    'nh': 'nh', 'nj': 'nj', 'nm': 'nm', 'ny': 'ny', 'nc': 'nc', 'nd': 'nd', 'oh': 'oh',
+    'ok': 'ok', 'or': 'or', 'pa': 'pa', 'ri': 'ri', 'sc': 'sc', 'sd': 'sd', 'tn': 'tn',
+    'tx': 'tx', 'ut': 'ut', 'vt': 'vt', 'va': 'va', 'wa': 'wa', 'wv': 'wv', 'wi': 'wi',
+    'wy': 'wy', 'dc': 'dc', 'pr': 'pr', 'vi': 'vi', 'gu': 'gu',
+    'alabama': 'al', 'alaska': 'ak', 'arizona': 'az', 'arkansas': 'ar', 'california': 'ca',
+    'colorado': 'co', 'connecticut': 'ct', 'delaware': 'de', 'florida': 'fl', 'georgia': 'ga',
+    'hawaii': 'hi', 'idaho': 'id', 'illinois': 'il', 'indiana': 'in', 'iowa': 'ia',
+    'kansas': 'ks', 'kentucky': 'ky', 'louisiana': 'la', 'maine': 'me', 'maryland': 'md',
+    'massachusetts': 'ma', 'michigan': 'mi', 'minnesota': 'mn', 'mississippi': 'ms',
+    'missouri': 'mo', 'montana': 'mt', 'nebraska': 'ne', 'nevada': 'nv', 'new hampshire': 'nh',
+    'new jersey': 'nj', 'new mexico': 'nm', 'new york': 'ny', 'north carolina': 'nc',
+    'north dakota': 'nd', 'ohio': 'oh', 'oklahoma': 'ok', 'oregon': 'or', 'pennsylvania': 'pa',
+    'rhode island': 'ri', 'south carolina': 'sc', 'south dakota': 'sd', 'tennessee': 'tn',
+    'texas': 'tx', 'utah': 'ut', 'vermont': 'vt', 'virginia': 'va', 'washington': 'wa',
+    'west virginia': 'wv', 'wisconsin': 'wi', 'wyoming': 'wy', 'district of columbia': 'dc',
+    'puerto rico': 'pr',
 }
-US_STATE_NAMES = {v: k for k, v in US_STATES.items()}
+US_MULTI_STATES = [k for k in sorted(US_STATES.keys(), key=lambda x: -len(x)) if ' ' in k]
+US_SINGLE_STATES = {k: v for k, v in US_STATES.items() if ' ' not in k}
 
-# Indian State Abbreviation & Local Script Mapping
+# Complete Indian State and Union Territory Mapping
 INDIA_STATES = {
-    'mh': 'maharashtra', 'tn': 'tamil nadu', 'ka': 'karnataka', 'dl': 'delhi',
-    'up': 'uttar pradesh', 'gj': 'gujarat', 'wb': 'west bengal', 'rj': 'rajasthan',
-    'hr': 'haryana', 'mp': 'madhya pradesh', 'pb': 'punjab', 'ap': 'andhra pradesh',
-    'ts': 'telangana', 'kl': 'kerala', 'or': 'odisha', 'br': 'bihar', 'as': 'assam',
-    'ch': 'chandigarh', 'uttr prdes': 'uttar pradesh', 'mharastr': 'maharashtra',
-    'tmilnatu': 'tamil nadu', 'dilli': 'delhi', 'hriyana': 'haryana',
-    'gujrat': 'gujarat', 'pnb': 'punjab', 'bengal': 'west bengal'
+    'andhra pradesh': 'andhra pradesh', 'arunachal pradesh': 'arunachal pradesh',
+    'assam': 'assam', 'bihar': 'bihar', 'chhattisgarh': 'chhattisgarh',
+    'chattisgarh': 'chhattisgarh', 'goa': 'goa', 'gujarat': 'gujarat',
+    'gujrat': 'gujarat', 'haryana': 'haryana', 'hriyana': 'haryana',
+    'himachal pradesh': 'himachal pradesh', 'himachal': 'himachal pradesh',
+    'jharkhand': 'jharkhand', 'karnataka': 'karnataka', 'kerala': 'kerala',
+    'madhya pradesh': 'madhya pradesh', 'maharashtra': 'maharashtra',
+    'mharastr': 'maharashtra', 'manipur': 'manipur', 'meghalaya': 'meghalaya',
+    'mizoram': 'mizoram', 'nagaland': 'nagaland', 'odisha': 'odisha',
+    'orissa': 'odisha', 'punjab': 'punjab', 'pnb': 'punjab',
+    'rajasthan': 'rajasthan', 'sikkim': 'sikkim', 'tamil nadu': 'tamil nadu',
+    'tamilnadu': 'tamil nadu', 'tmilnatu': 'tamil nadu', 'telangana': 'telangana',
+    'tripura': 'tripura', 'uttar pradesh': 'uttar pradesh', 'uttr prdes': 'uttar pradesh',
+    'uttarakhand': 'uttarakhand', 'uttaranchal': 'uttarakhand', 'west bengal': 'west bengal',
+    'bengal': 'west bengal', 'delhi': 'delhi', 'new delhi': 'delhi', 'dilli': 'delhi',
+    'chandigarh': 'chandigarh', 'puducherry': 'puducherry', 'pondicherry': 'puducherry',
+    'jammu and kashmir': 'jammu and kashmir', 'jammu': 'jammu and kashmir',
+    'kashmir': 'jammu and kashmir', 'ladakh': 'ladakh',
 }
+INDIA_MULTI_STATES = [k for k in sorted(INDIA_STATES.keys(), key=lambda x: -len(x)) if ' ' in k]
+INDIA_SINGLE_STATES = {k: v for k, v in INDIA_STATES.items() if ' ' not in k and len(k) > 2}
 
 ORDINALS = {
     '1st': '1', 'first': '1', '2nd': '2', 'second': '2',
@@ -80,7 +103,16 @@ ORDINALS = {
     '9th': '9', 'ninth': '9', '10th': '10', 'tenth': '10'
 }
 
-STATE_WORDS = set(US_STATES.values()) | set(US_STATES.keys()) | set(INDIA_STATES.values()) | set(INDIA_STATES.keys())
+STATE_WORDS = (
+    set(US_STATES.keys()) | set(US_STATES.values()) |
+    set(INDIA_STATES.keys()) | set(INDIA_STATES.values()) |
+    {'india', 'usa', 'united', 'states', 'france'}
+)
+# Add individual tokens of multi-word states so they don't leak into street tokens
+for _st in list(STATE_WORDS):
+    for _sub in _st.split():
+        STATE_WORDS.add(_sub)
+
 STOP_ADDR = {
     'road', 'street', 'avenue', 'boulevard', 'lane', 'drive', 'court',
     'place', 'parkway', 'highway', 'way', 'rue', 'unit', 'apartment',
@@ -200,34 +232,51 @@ def normalize_address(raw_addr: str, country: str = "") -> dict:
     t = strip_accents(t).lower().strip()
     t = RE_NOISE_PREFIX.sub('', t).strip()
     t = RE_PMB_POBOX.sub(' ', t)
+    t = re.sub(r'\bfl\s*(\d+)\b', r'floor \1', t)
+    t = re.sub(r'\bct\b', 'court', t)
 
     # Clean non-alphanumeric except spaces
     t_clean = RE_NON_ALPHANUM.sub(' ', t)
     words = t_clean.split()
 
     normalized_words = []
-    canonical_state = ''
-    country_upper = country.upper() if country else ""
-
     for w in words:
         if w in ORDINALS:
             w = ORDINALS[w]
         if w in STREET_MAP:
             w = STREET_MAP[w]
-        if country_upper == 'US':
-            if w in US_STATES:
-                canonical_state = w
-                w = US_STATES[w]
-            elif w in US_STATE_NAMES:
-                canonical_state = US_STATE_NAMES[w]
-        elif country_upper == 'INDIA':
-            if w in INDIA_STATES:
-                canonical_state = INDIA_STATES[w]
-                w = canonical_state
-
         normalized_words.append(w)
 
     clean_addr = ' '.join(normalized_words)
+    padded_addr = f' {clean_addr} '
+
+    canonical_state = ''
+    country_upper = country.upper() if country else ""
+
+    if country_upper == 'INDIA':
+        for m in INDIA_MULTI_STATES:
+            if f' {m} ' in padded_addr:
+                canonical_state = INDIA_STATES[m]
+                break
+        if not canonical_state:
+            for w in reversed(normalized_words):
+                if w in INDIA_SINGLE_STATES:
+                    canonical_state = INDIA_SINGLE_STATES[w]
+                    break
+    elif country_upper == 'US':
+        for m in US_MULTI_STATES:
+            if f' {m} ' in padded_addr:
+                canonical_state = US_STATES[m]
+                break
+        if not canonical_state:
+            for i in range(len(normalized_words) - 1, -1, -1):
+                w = normalized_words[i]
+                if w in US_SINGLE_STATES:
+                    # If followed immediately by a street suffix (e.g. 'virginia avenue', 'georgia road'), skip
+                    if i + 1 < len(normalized_words) and normalized_words[i + 1] in STOP_ADDR:
+                        continue
+                    canonical_state = US_SINGLE_STATES[w]
+                    break
 
     # Extract all digit sequences (up to 6 digits) and strip leading zeros
     raw_digits = re.findall(r'\b\d{1,6}\b', re.sub(r'\b0+(\d+)', r'\1', clean_addr))
